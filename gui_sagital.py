@@ -332,7 +332,7 @@ class SagittalCreatorMinimal(tk.Tk):
                     self.drag_start_set_pos = self._get_set_center(set_id)
                 return
 
-        # 2. Check Free Text Block Click
+        # 2. Check Free Text Block Click (Rectangular Bounding Box Hitbox)
         for t_obj in self.text_blocks_data:
             tx, ty = t_obj["x"], t_obj["y"]
             fs = float(t_obj.get("fontsize", 12))
@@ -881,8 +881,9 @@ class SagittalCreatorMinimal(tk.Tk):
                 return
 
             t_id = self._generate_unique_text_id()
-            default_x = 4.0 if len(self.sets_data) > 1 else 0.0
-            default_y = 2.5 if len(self.sets_data) > 1 else 4.0
+            # Default coordinates placed cleanly in the top-left corner
+            default_x = 0.8 if len(self.sets_data) > 1 else -3.2
+            default_y = 3.2 if len(self.sets_data) > 1 else 3.8
 
             self.text_blocks_data.append({
                 "id": t_id,
