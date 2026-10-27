@@ -13,12 +13,11 @@
 * **Auto-apuntado (Bucles)**: Haz clic **dos veces sobre el mismo nodo** para crear una flecha circular de auto-relación.
 
 ### 3. Añadir título al diagrama
-* Escribe la notación matemática en el campo **`Title:`** de la barra superior.
+* Escribe la notación matemática en el campo **`+ Add Text`** de la barra superior.
 * Puedes añadir nombres formales o relaciones como:
   * `G ⊆ A × B`
   * `f: A → B`
   * `R = {(1, a), (2, b)}`
-* **Comportamiento**: Se actualiza en tiempo real en la parte superior. Si dejas el campo vacío, el espacio se ajustará automáticamente sin mostrar ningún título en la imagen exportada.
 
 ### 4. Guardar y exportar
 * **`💾 Save`**: Guarda el diagrama en un archivo `.json`.
