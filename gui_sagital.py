@@ -35,19 +35,6 @@ COLOR_DANGER_FG = "#B71C1C"
 COLOR_DEFAULT_BTN = "#E2E8F0"# Soft slate gray
 COLOR_LOOP_ARROW = "#E57373" # Soft pastel red for self-loops
 
-# DRAG SENSITIVITY (0.4 = 40% speed for smooth & precise movement)
-DRAG_SENSITIVITY = 0.4
-
-
-def ccw(A, B, C):
-    """Checks counter-clockwise orientation of 3 points."""
-    return (C[1] - A[1]) * (B[0] - A[0]) > (B[1] - A[1]) * (C[0] - A[0])
-
-
-def segments_intersect(A, B, C, D):
-    """Returns True if line segment AB intersects line segment CD."""
-    return ccw(A, C, D) != ccw(B, C, D) and ccw(A, B, C) != ccw(A, B, D)
-
 
 def val_to_hex(val):
     """Converts slider value (0-100) to hex color. 0 = Black (#000000)."""
@@ -182,34 +169,33 @@ class SagittalCreatorMinimal(tk.Tk):
         self.geometry("1180x740")
         self.configure(bg=COLOR_BG)
 
-        # Configure TTK pastel styles
         self.setup_styles()
 
-        # Initial default data
         self.sets_data = [
             {"id": "set_1", "name": "A", "elements": ["1", "2", "3", "4"], "color": "#000000", "scale": 1.0},
             {"id": "set_2", "name": "B", "elements": ["a", "b", "c"], "color": "#000000", "scale": 1.0}
         ]
         self.relations_data = [
-            {"from_set": "set_1", "from": "1", "to_set": "set_2", "to": "a"},
-            {"from_set": "set_1", "from": "2", "to_set": "set_2", "to": "b"}
+            {"from_set": "set_1", "from": "1", "to_set": "set_2", "to": "a", "flipped": False},
+            {"from_set": "set_1", "from": "2", "to_set": "set_2", "to": "b", "flipped": False}
         ]
-        self.text_blocks_data = []        # List of dicts: {"id", "text", "x", "y", "color", "fontsize"}
+        self.text_blocks_data = []
 
-        self.selected_node = None         # (set_id, elem_id)
-        self.node_positions = {}          # (set_id, elem_id) -> (x, y)
-        self.label_positions = {}         # (set_id, elem_id) -> (x_lbl, y_lbl)
-        self.custom_node_positions = {}   # (set_id, elem_id) -> (x, y) (used in 1-set mode)
-        self.custom_set_positions = {}    # set_id -> (x_center, y_center) (used in 2+ set mode)
-        self.custom_label_angles = {}     # (set_id, elem_id) -> angle_in_radians
-        self.title_positions = {}         # set_id -> (x, y)
-        self.text_block_positions = {}    # text_id -> (x, y)
+        self.selected_node = None         
+        self.node_positions = {}          
+        self.label_positions = {}         
+        self.custom_node_positions = {}   
+        self.custom_set_positions = {}    
+        self.custom_label_angles = {}     
+        self.title_positions = {}         
+        self.text_block_positions = {}    
+        self.arrow_midpoints = {}         # rel_idx -> (mid_x, mid_y) for click detection
 
         # Drag & drop state variables
         self.dragging_node = None
         self.dragging_set = None
         self.dragging_text = None
-        self.dragging_label = None        # (set_id, elem_id)
+        self.dragging_label = None        
         self.drag_start_mouse = None
         self.drag_start_node_pos = None
         self.drag_start_set_pos = None
@@ -223,7 +209,6 @@ class SagittalCreatorMinimal(tk.Tk):
         self.redraw_diagram()
 
     def setup_styles(self):
-        """Configures global TTK styles with pastel tones."""
         self.style = ttk.Style(self)
         self.style.theme_use("clam")
 
@@ -288,7 +273,7 @@ class SagittalCreatorMinimal(tk.Tk):
 
         lbl_help = ttk.Label(
             left_group,
-            text="💡 Click Set Title/Text = Edit  |  Drag Nodes  |  Drag Numbers = Rotate  |  Click 2 Nodes = Arrow",
+            text="💡 Drag Nodes/Text | Drag Numbers = Rotate | Click 2 Nodes = Arrow | Click Arrow Curve = Flip side",
             style="Help.TLabel"
         )
         lbl_help.pack(side="left", padx=5)
@@ -351,20 +336,24 @@ class SagittalCreatorMinimal(tk.Tk):
         for t_obj in self.text_blocks_data:
             tx, ty = t_obj["x"], t_obj["y"]
             fs = float(t_obj.get("fontsize", 12))
-            hit_r = max(0.6, (fs / 12.0) * 0.6)
-            if math.hypot(tx - click_x, ty - click_y) < hit_r:
+            scale_font = fs / 12.0
+            text_str = str(t_obj.get("text", ""))
+            half_w = max(0.8, len(text_str) * 0.12 * scale_font)
+            half_h = max(0.4, 0.35 * scale_font)
+
+            if (tx - half_w <= click_x <= tx + half_w) and (ty - half_h <= click_y <= ty + half_h):
                 self.clicked_text = t_obj["id"]
                 self.dragging_text = t_obj["id"]
                 self.drag_start_text_pos = (tx, ty)
                 return
 
-        # 3. Check Element Label Click (Rotate text label around node)
+        # 3. Check Element Label Click
         for node_key, (lx, ly) in self.label_positions.items():
             if math.hypot(lx - click_x, ly - click_y) < 0.35:
                 self.dragging_label = node_key
                 return
 
-        # 4. Check Node Click (The point dot itself)
+        # 4. Check Node Click
         clicked_node = None
         min_dist = float("inf")
 
@@ -385,7 +374,15 @@ class SagittalCreatorMinimal(tk.Tk):
                 self.drag_start_set_pos = self._get_set_center(s_id)
             return
 
-        # 5. Check Ellipse Click (when 2+ sets)
+        # 5. Check Arrow Curve Click (TO FLIP CURVATURE SIDE)
+        for idx_rel, (mx, my) in self.arrow_midpoints.items():
+            if math.hypot(mx - click_x, my - click_y) < 0.45:
+                rel = self.relations_data[idx_rel]
+                rel["flipped"] = not rel.get("flipped", False)
+                self.redraw_diagram()
+                return
+
+        # 6. Check Ellipse Click (when 2+ sets)
         if num_sets > 1:
             y_spacing, x_spacing, x_start = 1.2, 4.0, 2.0
             for idx, s in enumerate(self.sets_data):
@@ -413,11 +410,10 @@ class SagittalCreatorMinimal(tk.Tk):
             self.dragging_text is None and self.dragging_label is None) or event.xdata is None or event.ydata is None:
             return
 
-        # Apply reduced drag sensitivity for smooth & precise movement
-        dx = (event.xdata - self.drag_start_mouse[0]) * DRAG_SENSITIVITY
-        dy = (event.ydata - self.drag_start_mouse[1]) * DRAG_SENSITIVITY
+        dx = event.xdata - self.drag_start_mouse[0]
+        dy = event.ydata - self.drag_start_mouse[1]
 
-        if math.hypot(dx, dy) > 0.02 or self.dragging_label is not None:
+        if math.hypot(dx, dy) > 0.05 or self.dragging_label is not None:
             self.has_dragged = True
 
         if self.has_dragged:
@@ -426,6 +422,13 @@ class SagittalCreatorMinimal(tk.Tk):
                 angle = math.atan2(event.ydata - ny, event.xdata - nx)
                 self.custom_label_angles[self.dragging_label] = angle
                 self.redraw_diagram()
+            elif self.dragging_text is not None and self.drag_start_text_pos is not None:
+                orig_x, orig_y = self.drag_start_text_pos
+                t_obj = next((t for t in self.text_blocks_data if t["id"] == self.dragging_text), None)
+                if t_obj:
+                    t_obj["x"] = orig_x + dx
+                    t_obj["y"] = orig_y + dy
+                    self.redraw_diagram()
             elif self.dragging_node is not None and self.drag_start_node_pos is not None:
                 orig_x, orig_y = self.drag_start_node_pos
                 self.custom_node_positions[self.dragging_node] = (orig_x + dx, orig_y + dy)
@@ -434,13 +437,6 @@ class SagittalCreatorMinimal(tk.Tk):
                 orig_x, orig_y = self.drag_start_set_pos
                 self.custom_set_positions[self.dragging_set] = (orig_x + dx, orig_y + dy)
                 self.redraw_diagram()
-            elif self.dragging_text is not None and self.drag_start_text_pos is not None:
-                orig_x, orig_y = self.drag_start_text_pos
-                t_obj = next((t for t in self.text_blocks_data if t["id"] == self.dragging_text), None)
-                if t_obj:
-                    t_obj["x"] = orig_x + dx
-                    t_obj["y"] = orig_y + dy
-                    self.redraw_diagram()
 
     def on_release(self, event):
         if not self.has_dragged:
@@ -475,7 +471,8 @@ class SagittalCreatorMinimal(tk.Tk):
                             "from_set": src_set,
                             "from": src_elem,
                             "to_set": dst_set,
-                            "to": dst_elem
+                            "to": dst_elem,
+                            "flipped": False
                         })
 
                     self.selected_node = None
@@ -495,11 +492,12 @@ class SagittalCreatorMinimal(tk.Tk):
         self.has_dragged = False
 
     def _compute_smart_relation_curvatures(self):
-        """Calculates dynamic connection curvatures (rad) for all non-self-loop relations to prevent overlapping."""
+        """Calculates dynamic curvatures (rad) per relation grouped by unordered pair (A,B) to guarantee ZERO overlaps."""
         default_src_set = self.sets_data[0]["id"] if self.sets_data else "set_1"
         default_dst_set = self.sets_data[-1]["id"] if self.sets_data else "set_2"
 
-        pair_groups = defaultdict(list)
+        pair_groups = defaultdict(lambda: {"fwd": [], "bwd": []})
+
         for idx, rel in enumerate(self.relations_data):
             f_set = str(rel.get("from_set", default_src_set))
             t_set = str(rel.get("to_set", default_dst_set))
@@ -513,51 +511,31 @@ class SagittalCreatorMinimal(tk.Tk):
                 continue
 
             pair_key = tuple(sorted([k_src, k_dst]))
-            pair_groups[pair_key].append((idx, k_src, k_dst))
+            if k_src == pair_key[0]:
+                pair_groups[pair_key]["fwd"].append(idx)
+            else:
+                pair_groups[pair_key]["bwd"].append(idx)
 
         rad_dict = {}
-        for pair_key, group in pair_groups.items():
-            if len(group) == 1:
-                idx, k_src, k_dst = group[0]
-                rad_dict[idx] = 0.35 if len(self.sets_data) == 1 else -0.25
-            else:
-                fwd = [item for item in group if item[1] == pair_key[0]]
-                bwd = [item for item in group if item[1] == pair_key[1]]
+        is_single_set = (len(self.sets_data) == 1)
 
-                for i, (idx, k_src, k_dst) in enumerate(fwd):
-                    rad_dict[idx] = 0.35 + i * 0.25
+        for pair_key, edges in pair_groups.items():
+            fwd_indices = edges["fwd"]
+            bwd_indices = edges["bwd"]
 
-                for j, (idx, k_src, k_dst) in enumerate(bwd):
-                    rad_dict[idx] = 0.35 + j * 0.25
+            base_rad = -0.32 if is_single_set else -0.28
 
-        # Check for intersecting lines across different pairs and separate their curvature signs (+ / -)
-        non_self_rels = [
-            (idx, (str(rel.get("from_set", default_src_set)), str(rel.get("from"))),
-                  (str(rel.get("to_set", default_dst_set)), str(rel.get("to"))))
-            for idx, rel in enumerate(self.relations_data)
-            if (str(rel.get("from_set", default_src_set)), str(rel.get("from"))) !=
-               (str(rel.get("to_set", default_dst_set)), str(rel.get("to")))
-        ]
+            for i, idx in enumerate(fwd_indices):
+                calc_rad = base_rad - i * 0.22
+                if self.relations_data[idx].get("flipped", False):
+                    calc_rad = -calc_rad
+                rad_dict[idx] = calc_rad
 
-        for i in range(len(non_self_rels)):
-            idx1, s1, d1 = non_self_rels[i]
-            if s1 not in self.node_positions or d1 not in self.node_positions:
-                continue
-            p1, p2 = self.node_positions[s1], self.node_positions[d1]
-
-            for j in range(i + 1, len(non_self_rels)):
-                idx2, s2, d2 = non_self_rels[j]
-                if s2 not in self.node_positions or d2 not in self.node_positions:
-                    continue
-                if len({s1, d1, s2, d2}) < 4:
-                    continue
-
-                p3, p4 = self.node_positions[s2], self.node_positions[d2]
-
-                if segments_intersect(p1, p2, p3, p4):
-                    if rad_dict[idx1] > 0 and rad_dict[idx2] > 0:
-                        rad_dict[idx2] = -0.35
-                        rad_dict[idx1] = 0.35
+            for j, idx in enumerate(bwd_indices):
+                calc_rad = base_rad - j * 0.22
+                if self.relations_data[idx].get("flipped", False):
+                    calc_rad = -calc_rad
+                rad_dict[idx] = calc_rad
 
         return rad_dict
 
@@ -569,6 +547,7 @@ class SagittalCreatorMinimal(tk.Tk):
         self.label_positions.clear()
         self.title_positions.clear()
         self.text_block_positions.clear()
+        self.arrow_midpoints.clear()
 
         num_sets = len(self.sets_data)
         if num_sets == 0 and not self.text_blocks_data:
@@ -594,9 +573,9 @@ class SagittalCreatorMinimal(tk.Tk):
             if n == 2:
                 angles = np.array([np.pi, 0.0])
             elif n == 4:
-                angles = np.array([3 * np.pi / 4.0, np.pi / 4.0, 5 * np.pi / 4.0, 7 * np.pi / 4.0])
+                angles = np.array([3 * np.pi / 4.0, np.pi / 4.0, 7 * np.pi / 4.0, 5 * np.pi / 4.0])
             elif n > 0:
-                angles = np.linspace(0, 2 * np.pi, n, endpoint=False) + np.pi / 2
+                angles = 3 * np.pi / 4.0 - np.linspace(0, 2 * np.pi, n, endpoint=False)
             else:
                 angles = np.array([])
 
@@ -665,16 +644,24 @@ class SagittalCreatorMinimal(tk.Tk):
                         all_min_y.append(y1 - 1.5 * scale)
                         all_max_y.append(y1 + 1.5 * scale)
                     else:
-                        rad = smart_rads.get(idx_rel, 0.35)
+                        rad = smart_rads.get(idx_rel, -0.32)
                         ax.annotate(
                             '', xy=(x2, y2), xytext=(x1, y1),
                             arrowprops=dict(
                                 arrowstyle="->,head_width=0.35,head_length=0.50",
-                                color="#4A5568", lw=1.8, shrinkA=12 * scale, shrinkB=12 * scale,
+                                color="#4A5568", lw=1.8, shrinkA=10 * scale, shrinkB=10 * scale,
                                 connectionstyle=f"arc3,rad={rad:.2f}"
                             ),
                             zorder=2
                         )
+                        V = np.array([x2 - x1, y2 - y1])
+                        dist = np.linalg.norm(V)
+                        if dist > 1e-6:
+                            u = V / dist
+                            n_left = np.array([-u[1], u[0]])
+                            curve_mid = np.array([(x1 + x2)/2.0, (y1 + y2)/2.0]) - 0.5 * rad * dist * n_left
+                            self.arrow_midpoints[idx_rel] = (curve_mid[0], curve_mid[1])
+
                         if lbl:
                             mid_x, mid_y = (x1 + x2) / 2, (y1 + y2) / 2
                             ax.text(mid_x, mid_y, lbl, fontsize=9, color=COLOR_MUTED, ha='center')
@@ -778,13 +765,10 @@ class SagittalCreatorMinimal(tk.Tk):
                         all_max_y.append(start[1] + 1.2 * sc)
                     else:
                         is_forward = start[0] <= end[0]
-                        rad = smart_rads.get(idx_rel, -0.25)
-                        
-                        dx_start = 0.15 if start[0] < end[0] else (-0.15 if start[0] > end[0] else 0)
-                        dx_end = -0.15 if start[0] < end[0] else (0.15 if start[0] > end[0] else 0)
+                        rad = smart_rads.get(idx_rel, -0.28)
 
                         ax.annotate(
-                            '', xy=(end[0] + dx_end, end[1]), xytext=(start[0] + dx_start, start[1]),
+                            '', xy=(end[0], end[1]), xytext=(start[0], start[1]),
                             arrowprops=dict(
                                 arrowstyle="->,head_width=0.30,head_length=0.45",
                                 color="#4A5568", lw=1.5, shrinkA=8, shrinkB=8,
@@ -792,6 +776,14 @@ class SagittalCreatorMinimal(tk.Tk):
                             ),
                             zorder=2
                         )
+                        V = np.array([end[0] - start[0], end[1] - start[1]])
+                        dist = np.linalg.norm(V)
+                        if dist > 1e-6:
+                            u = V / dist
+                            n_left = np.array([-u[1], u[0]])
+                            curve_mid = np.array([(start[0] + end[0])/2.0, (start[1] + end[1])/2.0]) - 0.5 * rad * dist * n_left
+                            self.arrow_midpoints[idx_rel] = (curve_mid[0], curve_mid[1])
+
                         if lbl:
                             mid_x = (start[0] + end[0]) / 2
                             offset_y = 0.35 if is_forward else -0.35
@@ -1199,7 +1191,7 @@ class SagittalCreatorMinimal(tk.Tk):
         btn_cancel = ttk.Button(frame_btns, text="Cancel", style="TButton", command=dialog.destroy)
         btn_cancel.pack(side="left")
 
-        btn_accept = ttk.Button(frame_btns, text="➕ Create Set", style="Primary.TButton", command=save)
+        btn_accept = ttk.Button(frame_btns, text="➕ Create Text", style="Primary.TButton", command=save)
         btn_accept.pack(side="right")
 
         dialog.wait_visibility()
