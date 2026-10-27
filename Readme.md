@@ -35,8 +35,10 @@ Asegúrate de tener instalado Python 3.8+ y las siguientes librerías:
 pip install matplotlib numpy
 ```
 
-
 Ejecución
 
 ```bash
 python3 gui_sagital.py
+```
+
+Si salta algun error mas pregunta chati
